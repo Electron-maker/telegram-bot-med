@@ -9,7 +9,7 @@ import logging
 import os
 
 API_TOKEN = '8063346130:AAGcwNNQXzNZjaE3Nes4eKmiQr2FRAvdgc4'  # <-- Замените на свой
-ADMIN_ID =  6449574815      # <-- Замените на свой
+ADMIN_ID = 6449574815  # <-- Замените на свой
 
 logging.basicConfig(level=logging.INFO)
 
@@ -56,6 +56,8 @@ async def start(message: types.Message, state: FSMContext):
 @dp.callback_query_handler(lambda c: c.data.startswith('choose_'), state=Form.subjects)
 async def choose_subject(callback_query: types.CallbackQuery, state: FSMContext):
     user_id = callback_query.from_user.id
+    if user_id not in user_data:
+        user_data[user_id] = {'subjects': [], 'months': 1}
     subject = callback_query.data.split('_')[1]
     if subject not in user_data[user_id]['subjects']:
         user_data[user_id]['subjects'].append(subject)
@@ -64,8 +66,7 @@ async def choose_subject(callback_query: types.CallbackQuery, state: FSMContext)
 @dp.callback_query_handler(lambda c: c.data == 'continue', state=Form.subjects)
 async def process_continue(callback_query: types.CallbackQuery, state: FSMContext):
     user_id = callback_query.from_user.id
-    subjects = user_data[user_id]['subjects']
-    if not subjects:
+    if user_id not in user_data or not user_data[user_id]['subjects']:
         await callback_query.answer("Вы не выбрали ни одного предмета", show_alert=True)
         return
     await Form.next()
@@ -123,6 +124,9 @@ async def ask_receipt(callback_query: types.CallbackQuery, state: FSMContext):
 @dp.message_handler(content_types=types.ContentType.PHOTO, state=Form.waiting_for_receipt)
 async def handle_receipt(message: types.Message, state: FSMContext):
     user_id = message.from_user.id
+    if user_id not in user_data:
+        await message.answer("Сначала начните с команды /start.")
+        return
     photo = message.photo[-1]
     caption = (
         f"📥 Новый чек от пользователя @{message.from_user.username or 'Без ника'}\n"
