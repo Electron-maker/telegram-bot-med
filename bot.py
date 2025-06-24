@@ -1,3 +1,13 @@
+# Улучшенный Telegram-бот на aiogram 2.25.1
+# Функции:
+# - Выбор предметов
+# - Выбор количества месяцев
+# - Автоматический расчёт стоимости со скидкой
+# - Загрузка чека
+# - Отправка чека администратору
+# - Защита от ошибок (KeyError, сбросов, повторного запуска)
+# Использует FSMContext вместо глобальной переменной для хранения состояния
+
 from aiogram import Bot, Dispatcher, types
 from aiogram.types import InputFile, InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.utils import executor
@@ -8,8 +18,9 @@ from aiogram.dispatcher.filters.state import State, StatesGroup
 import logging
 import os
 
-API_TOKEN = '8063346130:AAGcwNNQXzNZjaE3Nes4eKmiQr2FRAvdgc4'  # <-- Замените на свой
-ADMIN_ID = 6449574815  # <-- Замените на свой
+API_TOKEN = '8063346130:AAGcwNNQXzNZjaE3Nes4eKmiQr2FRAvdgc4'
+ADMIN_ID = 6449574815
+CARD_PATH = 'cards'
 
 logging.basicConfig(level=logging.INFO)
 
@@ -20,9 +31,6 @@ class Form(StatesGroup):
     subjects = State()
     months = State()
     waiting_for_receipt = State()
-
-CARD_PATH = 'cards'
-user_data = {}
 
 subjects_data = {
     'Химия': 'chemistry.jpg',
@@ -40,8 +48,7 @@ subjects_emojis = {
 
 @dp.message_handler(CommandStart())
 async def start(message: types.Message, state: FSMContext):
-    user_id = message.from_user.id
-    user_data[user_id] = {'subjects': [], 'months': 1}
+    await state.update_data(subjects=[], months=1)
     await state.set_state(Form.subjects.state)
 
     image = InputFile(os.path.join(CARD_PATH, 'combined.jpg'))
@@ -55,18 +62,19 @@ async def start(message: types.Message, state: FSMContext):
 
 @dp.callback_query_handler(lambda c: c.data.startswith('choose_'), state=Form.subjects)
 async def choose_subject(callback_query: types.CallbackQuery, state: FSMContext):
-    user_id = callback_query.from_user.id
-    if user_id not in user_data:
-        user_data[user_id] = {'subjects': [], 'months': 1}
     subject = callback_query.data.split('_')[1]
-    if subject not in user_data[user_id]['subjects']:
-        user_data[user_id]['subjects'].append(subject)
+    data = await state.get_data()
+    subjects = data.get("subjects", [])
+    if subject not in subjects:
+        subjects.append(subject)
+        await state.update_data(subjects=subjects)
     await callback_query.answer(f"Вы выбрали: {subject}")
 
 @dp.callback_query_handler(lambda c: c.data == 'continue', state=Form.subjects)
 async def process_continue(callback_query: types.CallbackQuery, state: FSMContext):
-    user_id = callback_query.from_user.id
-    if user_id not in user_data or not user_data[user_id]['subjects']:
+    data = await state.get_data()
+    subjects = data.get("subjects", [])
+    if not subjects:
         await callback_query.answer("Вы не выбрали ни одного предмета", show_alert=True)
         return
     await Form.next()
@@ -74,17 +82,18 @@ async def process_continue(callback_query: types.CallbackQuery, state: FSMContex
     months_keyboard = InlineKeyboardMarkup(row_width=4)
     for i in range(1, 13):
         months_keyboard.insert(InlineKeyboardButton(str(i), callback_data=f"months_{i}"))
-    await bot.send_message(user_id, "На сколько месяцев вы хотите оплатить курс?", reply_markup=months_keyboard)
+    await bot.send_message(callback_query.from_user.id, "На сколько месяцев вы хотите оплатить курс?", reply_markup=months_keyboard)
 
 @dp.callback_query_handler(lambda c: c.data.startswith('months_'), state=Form.months)
 async def process_months(callback_query: types.CallbackQuery, state: FSMContext):
     user_id = callback_query.from_user.id
     months = int(callback_query.data.split('_')[1])
-    user_data[user_id]['months'] = months
+    data = await state.get_data()
+    subjects = data.get("subjects", [])
+    await state.update_data(months=months)
 
     price_per_subject = 250
-    num_subjects = len(user_data[user_id]['subjects'])
-    total = price_per_subject * num_subjects * months
+    total = price_per_subject * len(subjects) * months
 
     if 3 <= months <= 5:
         discount = 0.05
@@ -97,8 +106,8 @@ async def process_months(callback_query: types.CallbackQuery, state: FSMContext)
 
     discounted_total = int(total * (1 - discount))
 
-    message_text = (
-        f"Предметы: {', '.join(user_data[user_id]['subjects'])}\n"
+    text = (
+        f"Предметы: {', '.join(subjects)}\n"
         f"Месяцев: {months}\n"
         f"Цена до скидки: {total} сомони\n"
         f"Скидка: {int(discount * 100)}%\n"
@@ -109,11 +118,11 @@ async def process_months(callback_query: types.CallbackQuery, state: FSMContext)
         f"После оплаты нажмите кнопку ниже и загрузите чек."
     )
 
-    pay_button = InlineKeyboardMarkup().add(
+    keyboard = InlineKeyboardMarkup().add(
         InlineKeyboardButton("Я оплатил", callback_data="paid")
     )
     await callback_query.message.delete()
-    await bot.send_message(user_id, message_text, reply_markup=pay_button)
+    await bot.send_message(user_id, text, reply_markup=keyboard)
     await Form.waiting_for_receipt.set()
 
 @dp.callback_query_handler(lambda c: c.data == 'paid', state=Form.waiting_for_receipt)
@@ -124,14 +133,15 @@ async def ask_receipt(callback_query: types.CallbackQuery, state: FSMContext):
 @dp.message_handler(content_types=types.ContentType.PHOTO, state=Form.waiting_for_receipt)
 async def handle_receipt(message: types.Message, state: FSMContext):
     user_id = message.from_user.id
-    if user_id not in user_data:
-        await message.answer("Сначала начните с команды /start.")
-        return
+    data = await state.get_data()
+    subjects = data.get("subjects", [])
+    months = data.get("months", 1)
+
     photo = message.photo[-1]
     caption = (
         f"📥 Новый чек от пользователя @{message.from_user.username or 'Без ника'}\n"
-        f"Предметы: {', '.join(user_data[user_id]['subjects'])}\n"
-        f"Месяцев: {user_data[user_id]['months']}"
+        f"Предметы: {', '.join(subjects)}\n"
+        f"Месяцев: {months}"
     )
     await bot.send_photo(chat_id=ADMIN_ID, photo=photo.file_id, caption=caption)
 
@@ -160,4 +170,5 @@ async def return_to_main_menu(callback_query: types.CallbackQuery, state: FSMCon
     await start(callback_query.message, state)
 
 if __name__ == '__main__':
+    from aiogram import executor
     executor.start_polling(dp, skip_updates=True)
