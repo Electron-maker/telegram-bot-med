@@ -9,8 +9,8 @@ from aiogram.utils.exceptions import TelegramAPIError
 import logging
 import os
 
-API_TOKEN = 'YOUR_BOT_TOKEN'
-ADMIN_ID = YOUR_ADMIN_ID  # например: 6449574815
+API_TOKEN = '8063346130:AAGcwNNQXzNZjaE3Nes4eKmiQr2FRAvdgc4'
+ADMIN_ID = 6449574815
 CARD_PATH = 'cards'
 
 logging.basicConfig(level=logging.INFO)
